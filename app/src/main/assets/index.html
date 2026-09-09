@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>p5.studio Live Coding</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    
+    html, body {
+      width: 100%;
+      height: 100%;
+      background-color: #121212;
+      color: #E6E1E5;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #app-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    #canvas-container {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      position: relative;
+      background-color: #121212;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    /* p5 Canvas Overlay Badge */
+    .canvas-badge {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      padding: 3px 8px;
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(4px);
+      border-radius: 4px;
+      font-size: 10px;
+      font-family: monospace;
+      color: rgba(255, 255, 255, 0.8);
+      letter-spacing: 1px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      z-index: 5;
+      pointer-events: none;
+    }
+
+    canvas {
+      display: block;
+      touch-action: none;
+    }
+
+    #editor-container {
+      height: 52%;
+      width: 100%;
+      background-color: #1D1B20;
+      border-top: 1px solid #49454F;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 10;
+      box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.5);
+    }
+
+    #editor-header-tab {
+      height: 32px;
+      background-color: #2B2930;
+      border-bottom: 1px solid #49454F;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      font-size: 11px;
+      font-family: monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #D0BCFF;
+    }
+
+    #editor-header-tab .tab-meta {
+      margin-left: auto;
+      display: flex;
+      gap: 12px;
+      color: #938F99;
+      font-size: 11px;
+    }
+
+    #editor-container.collapsed {
+      height: 0px !important;
+      border-top: none;
+      overflow: hidden;
+    }
+
+    #editor-mount {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+      font-family: 'Fira Code', 'Consolas', monospace;
+      font-size: 13px;
+      user-select: text;
+    }
+
+    /* Error Overlay Banner */
+    #error-banner {
+      display: none;
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      background: rgba(179, 38, 30, 0.95);
+      backdrop-filter: blur(8px);
+      color: #FFFFFF;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-family: monospace;
+      z-index: 100;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      border-left: 4px solid #F27D26;
+      animation: slideIn 0.2s ease-out;
+    }
+
+    #error-banner .error-title {
+      font-weight: bold;
+      margin-bottom: 2px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    #error-banner .close-btn {
+      cursor: pointer;
+      font-weight: bold;
+      padding: 0 4px;
+    }
+
+    @keyframes slideIn {
+      from { transform: translateY(-10px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    /* CodeMirror Professional Polish Theme Customizations */
+    .cm-editor {
+      height: 100% !important;
+      background-color: #1D1B20 !important;
+    }
+    .cm-scroller {
+      overflow: auto !important;
+      font-family: 'Fira Code', 'Consolas', monospace !important;
+    }
+    .cm-gutters {
+      background-color: #2B2930 !important;
+      color: #49454F !important;
+      border-right: 1px solid #49454F !important;
+    }
+    .cm-activeLineGutter {
+      background-color: #36343B !important;
+      color: #D0BCFF !important;
+    }
+    .cm-activeLine {
+      background-color: rgba(73, 69, 79, 0.3) !important;
+    }
+  </style>
+
+  <!-- Local Offline JS Bundles -->
+  <script src="p5.min.js"></script>
+  <script src="cm6-bundle.js"></script>
+</head>
+<body>
+
+  <div id="app-container">
+    <div id="error-banner">
+      <div class="error-title">
+        <span>COMPILATION ERROR</span>
+        <span class="close-btn" onclick="hideErrorBanner()">×</span>
+      </div>
+      <div id="error-message"></div>
+    </div>
+
+    <!-- p5.js Canvas Container -->
+    <div id="canvas-container">
+      <div class="canvas-badge">p5_canvas_01</div>
+    </div>
+
+    <!-- CodeMirror 6 Editor Container -->
+    <div id="editor-container">
+      <div id="editor-header-tab">
+        <span>sketch.js</span>
+        <div class="tab-meta">
+          <span>UTF-8</span>
+          <span>JS</span>
+        </div>
+      </div>
+      <div id="editor-mount"></div>
+    </div>
+  </div>
+
+  <script src="runner.js"></script>
+</body>
+</html>

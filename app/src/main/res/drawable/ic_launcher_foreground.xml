@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- p5 Asterisk / Code Symbol Silhouette -->
+    <group
+        android:pivotX="54"
+        android:pivotY="54">
+        <!-- Glowing Accent Rings -->
+        <path
+            android:pathData="M54,24 A30,30 0 1,0 54,84 A30,30 0 1,0 54,24"
+            android:strokeWidth="3"
+            android:strokeColor="#FFED4C5C"
+            android:fillColor="#00000000" />
+        <path
+            android:pathData="M34,44 L22,54 L34,64"
+            android:strokeWidth="4"
+            android:strokeColor="#FF38BDF8"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:fillColor="#00000000" />
+        <path
+            android:pathData="M74,44 L86,54 L74,64"
+            android:strokeWidth="4"
+            android:strokeColor="#FF38BDF8"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:fillColor="#00000000" />
+        <!-- Central Asterisk / Starburst -->
+        <path
+            android:pathData="M54,36 V72 M36,54 H72 M41,41 L67,67 M67,41 L41,67"
+            android:strokeWidth="4"
+            android:strokeColor="#FFF43F5E"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000" />
+    </group>
+</vector>

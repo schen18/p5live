@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">p5.js Live Code</string>
+    <string name="status_running">Status: Running Sketch…</string>
+    <string name="status_stopped">Status: Animation Loop Stopped</string>
+    <string name="status_engine_loaded">Engine Loaded | CodeMirror 6 Active</string>
+    <string name="status_engine_ready">Status: p5.js Live Engine Ready</string>
+    <string name="status_load_error">Error loading engine page</string>
+    <string name="status_js_error_fmt">Error [Line %1$d]: %2$s</string>
+    <string name="status_js_log_fmt">JS: %1$s</string>
+    <string name="status_fps_fmt">%1$d FPS ●</string>
+    <string name="status_loaded_preset_fmt">Loaded Preset: %1$s</string>
+</resources>
