@@ -35,47 +35,15 @@ class AudioInputManager(
         private set
 
     private val bandValues = FloatArray(16)
-    private var maxPeakRms = 1000.0 // Dynamic peak baseline for auto-gain
+    private var maxPeakRms = 600.0 // Dynamic peak baseline for auto-gain
+    private var consecutiveZeroFrames = 0
+    private var captureRestarts = 0
 
     @SuppressLint("MissingPermission")
     fun startRecording(): Boolean {
         if (isRecording.get()) return true
 
-        val sampleRate = 44100
-        val channelConfig = AudioFormat.CHANNEL_IN_MONO
-        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-        val minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        val bufferSize = max(minBufSize, 2048)
-
-        // Try candidate audio sources for maximum device compatibility
-        val audioSources = intArrayOf(
-            MediaRecorder.AudioSource.MIC,
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            MediaRecorder.AudioSource.DEFAULT
-        )
-
-        var initializedRecord: AudioRecord? = null
-        for (source in audioSources) {
-            try {
-                val rec = AudioRecord(
-                    source,
-                    sampleRate,
-                    channelConfig,
-                    audioFormat,
-                    bufferSize
-                )
-                if (rec.state == AudioRecord.STATE_INITIALIZED) {
-                    initializedRecord = rec
-                    Log.i(TAG, "AudioRecord initialized with audio source $source")
-                    break
-                } else {
-                    rec.release()
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to initialize AudioRecord with source $source: ${e.message}")
-            }
-        }
-
+        val initializedRecord = createAudioRecord()
         if (initializedRecord == null) {
             Log.e(TAG, "Could not initialize AudioRecord with any audio source.")
             return false
@@ -85,6 +53,8 @@ class AudioInputManager(
         try {
             audioRecord?.startRecording()
             isRecording.set(true)
+            consecutiveZeroFrames = 0
+            captureRestarts = 0
 
             recordThread = Thread {
                 val buffer = ShortArray(1024)
@@ -101,11 +71,37 @@ class AudioInputManager(
                         }
                         val rms = sqrt(sum / read)
 
+                        // An exactly-zero stream means the platform muted this
+                        // capture (app-op silencing or preemption by a higher
+                        // priority client), not silence in the room: real
+                        // hardware always carries a non-zero noise floor.
+                        if (sum == 0.0) {
+                            consecutiveZeroFrames++
+                            if (consecutiveZeroFrames >= ZERO_FRAME_LIMIT &&
+                                captureRestarts < MAX_CAPTURE_RESTARTS
+                            ) {
+                                captureRestarts++
+                                Log.w(
+                                    TAG,
+                                    "Mic delivered $consecutiveZeroFrames silent frames - capture may be " +
+                                        "muted by the system. Restarting AudioRecord " +
+                                        "($captureRestarts/$MAX_CAPTURE_RESTARTS)."
+                                )
+                                if (!restartCapture()) {
+                                    isRecording.set(false)
+                                    break
+                                }
+                                consecutiveZeroFrames = 0
+                            }
+                        } else {
+                            consecutiveZeroFrames = 0
+                        }
+
                         // Dynamic Peak Tracking for Adaptive Mic Sensitivity
                         maxPeakRms = if (rms > maxPeakRms) {
                             rms
                         } else {
-                            max(500.0, maxPeakRms * 0.995)
+                            max(300.0, maxPeakRms * 0.99)
                         }
 
                         // Normalize raw volume against dynamic peak floor
@@ -120,7 +116,7 @@ class AudioInputManager(
                         currentVolume = smoothedVolume
 
                         // Calculate 16-Band Frequency Spectrum
-                        computeSpectrumBands(buffer, read, sampleRate)
+                        computeSpectrumBands(buffer, read, SAMPLE_RATE)
 
                         currentSpectrumJson = buildSpectrumJson(bandValues)
 
@@ -157,6 +153,77 @@ class AudioInputManager(
         }
         currentVolume = 0f
         currentSpectrumJson = "[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"
+        consecutiveZeroFrames = 0
+        captureRestarts = 0
+    }
+
+    /**
+     * Builds an AudioRecord, trying candidate audio sources for maximum
+     * device compatibility. Returns null if none initialize.
+     */
+    @SuppressLint("MissingPermission")
+    private fun createAudioRecord(): AudioRecord? {
+        val channelConfig = AudioFormat.CHANNEL_IN_MONO
+        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+        val minBufSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, channelConfig, audioFormat)
+        val bufferSize = max(minBufSize, 2048)
+
+        val audioSources = intArrayOf(
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.DEFAULT
+        )
+
+        for (source in audioSources) {
+            try {
+                val rec = AudioRecord(
+                    source,
+                    SAMPLE_RATE,
+                    channelConfig,
+                    audioFormat,
+                    bufferSize
+                )
+                if (rec.state == AudioRecord.STATE_INITIALIZED) {
+                    Log.i(TAG, "AudioRecord initialized with audio source $source")
+                    return rec
+                } else {
+                    rec.release()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to initialize AudioRecord with source $source: ${e.message}")
+            }
+        }
+        return null
+    }
+
+    /**
+     * Recreates the AudioRecord in-place after the platform muted the capture.
+     * Called from the record thread.
+     */
+    @SuppressLint("MissingPermission")
+    private fun restartCapture(): Boolean {
+        try {
+            audioRecord?.stop()
+        } catch (_: Exception) {
+        }
+        try {
+            audioRecord?.release()
+        } catch (_: Exception) {
+        }
+
+        audioRecord = createAudioRecord() ?: run {
+            Log.e(TAG, "Could not re-initialize AudioRecord after silent capture.")
+            return false
+        }
+
+        return try {
+            audioRecord?.startRecording()
+            Log.i(TAG, "AudioRecord restarted after silent capture.")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error restarting recording: ${e.message}", e)
+            false
+        }
     }
 
     private fun computeSpectrumBands(buffer: ShortArray, size: Int, sampleRate: Int) {
@@ -165,12 +232,17 @@ class AudioInputManager(
             2600f, 3600f, 4800f, 6200f, 7800f, 9500f, 11000f, 12500f
         )
 
-        val scaleFactor = max(1000.0f, maxPeakRms.toFloat() * 0.5f)
+        // Goertzel |X(k)| for a sine of amplitude A is about A * size / 2, so
+        // dividing by size/2 recovers an amplitude comparable to the time-domain
+        // RMS. A band reads 1.0 when its amplitude clearly exceeds the recent
+        // overall level; silence stays near zero.
+        val reference = max(200.0f, maxPeakRms.toFloat() * 1.5f)
 
         for (i in 0 until 16) {
             val freq = targetFreqs[i]
-            val mag = goertzelMagnitude(buffer, size, sampleRate.toFloat(), freq)
-            val normalizedMag = min(1.0f, (mag / scaleFactor))
+            val magnitude = goertzelMagnitude(buffer, size, sampleRate.toFloat(), freq)
+            val amplitude = magnitude / (size * 0.5f)
+            val normalizedMag = min(1.0f, amplitude / reference)
 
             bandValues[i] = if (normalizedMag > bandValues[i]) {
                 (bandValues[i] * 0.25f) + (normalizedMag * 0.75f)
@@ -212,5 +284,10 @@ class AudioInputManager(
 
     companion object {
         private const val TAG = "AudioInputManager"
+        private const val SAMPLE_RATE = 44100
+
+        // ~2s of exactly-zero frames at the ~40 FPS read rate
+        private const val ZERO_FRAME_LIMIT = 80
+        private const val MAX_CAPTURE_RESTARTS = 2
     }
 }

@@ -101,128 +101,133 @@ let editor = null;
 let currentSketch = null;
 let fpsReportTimer = null;
 
-// Initialize CodeMirror 6 Editor and Bridge Pipeline
-window.addEventListener('DOMContentLoaded', () => {
-  // Define Dual-Engine p5.AudioIn Wrapper Class
-  const AudioInClass = class {
-    constructor() {
-      this.enabled = false;
+// AudioIn Class Definition
+class AudioInClass {
+  constructor() {
+    this.enabled = false;
+    this.audioCtx = null;
+    this.analyser = null;
+    this.dataArray = null;
+  }
+
+  async start(callback) {
+    this.enabled = true;
+
+    // 1. Trigger Native Android Microphone Capture
+    if (window.AndroidBridge && window.AndroidBridge.startMic) {
+      window.AndroidBridge.startMic();
+    }
+
+    // 2. Web Audio API getUserMedia Fallback
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && !this.analyser) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+          this.audioCtx = new AudioContextClass();
+          if (this.audioCtx.state === 'suspended') {
+            await this.audioCtx.resume();
+          }
+          const source = this.audioCtx.createMediaStreamSource(stream);
+          this.analyser = this.audioCtx.createAnalyser();
+          this.analyser.fftSize = 64;
+          source.connect(this.analyser);
+          this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+        }
+      }
+    } catch (err) {
+      console.log('Web Audio getUserMedia fallback:', err.message);
+    }
+
+    if (callback) callback();
+  }
+
+  stop() {
+    this.enabled = false;
+    if (window.AndroidBridge && window.AndroidBridge.stopMic) {
+      window.AndroidBridge.stopMic();
+    }
+    if (this.audioCtx) {
+      try { this.audioCtx.close(); } catch (e) {}
       this.audioCtx = null;
       this.analyser = null;
-      this.dataArray = null;
+    }
+  }
+
+  getLevel() {
+    if (!this.enabled) {
+      this.start();
     }
 
-    async start(callback) {
-      this.enabled = true;
-
-      // 1. Trigger Native Android Microphone Capture
-      if (window.AndroidBridge && window.AndroidBridge.startMic) {
-        window.AndroidBridge.startMic();
+    // Web Audio Analyser calculation
+    if (this.analyser && this.dataArray) {
+      this.analyser.getByteFrequencyData(this.dataArray);
+      let sum = 0;
+      for (let i = 0; i < this.dataArray.length; i++) {
+        sum += this.dataArray[i];
       }
+      const webAudioVol = (sum / this.dataArray.length) / 255.0;
+      if (webAudioVol > 0.01) {
+        return webAudioVol;
+      }
+    }
 
-      // 2. Web Audio API getUserMedia Fallback
+    // Native Android Bridge calculation
+    if (window.AndroidBridge && window.AndroidBridge.getAudioVolume) {
       try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && !this.analyser) {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-          if (AudioContextClass) {
-            this.audioCtx = new AudioContextClass();
-            if (this.audioCtx.state === 'suspended') {
-              await this.audioCtx.resume();
-            }
-            const source = this.audioCtx.createMediaStreamSource(stream);
-            this.analyser = this.audioCtx.createAnalyser();
-            this.analyser.fftSize = 64;
-            source.connect(this.analyser);
-            this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
-          }
-        }
-      } catch (err) {
-        console.log('Web Audio getUserMedia fallback:', err.message);
-      }
-
-      if (callback) callback();
+        const vol = window.AndroidBridge.getAudioVolume();
+        if (typeof vol === 'number' && vol > 0) return vol;
+      } catch (e) {}
     }
 
-    stop() {
-      this.enabled = false;
-      if (window.AndroidBridge && window.AndroidBridge.stopMic) {
-        window.AndroidBridge.stopMic();
-      }
-      if (this.audioCtx) {
-        try { this.audioCtx.close(); } catch (e) {}
-        this.audioCtx = null;
-        this.analyser = null;
-      }
+    return window._currentAudioLevel || 0;
+  }
+
+  getSpectrum() {
+    if (!this.enabled) {
+      this.start();
     }
 
-    getLevel() {
-      if (!this.enabled) {
-        this.start();
+    // Web Audio Analyser spectrum calculation
+    if (this.analyser && this.dataArray) {
+      this.analyser.getByteFrequencyData(this.dataArray);
+      const spec = [];
+      const numBands = 16;
+      const step = Math.floor(this.dataArray.length / numBands) || 1;
+      let hasWebAudioData = false;
+
+      for (let i = 0; i < numBands; i++) {
+        const val = (this.dataArray[i * step] || 0) / 255.0;
+        spec.push(val);
+        if (val > 0.01) hasWebAudioData = true;
       }
 
-      // Web Audio Analyser calculation
-      if (this.analyser && this.dataArray) {
-        this.analyser.getByteFrequencyData(this.dataArray);
-        let sum = 0;
-        for (let i = 0; i < this.dataArray.length; i++) {
-          sum += this.dataArray[i];
-        }
-        const webAudioVol = (sum / this.dataArray.length) / 255.0;
-        if (webAudioVol > 0.01) {
-          return webAudioVol;
-        }
-      }
-
-      // Native Android Bridge calculation
-      if (window.AndroidBridge && window.AndroidBridge.getAudioVolume) {
-        try {
-          const vol = window.AndroidBridge.getAudioVolume();
-          if (typeof vol === 'number' && vol > 0) return vol;
-        } catch (e) {}
-      }
-
-      return window._currentAudioLevel || 0;
+      if (hasWebAudioData) return spec;
     }
 
-    getSpectrum() {
-      if (!this.enabled) {
-        this.start();
-      }
-
-      // Web Audio Analyser spectrum calculation
-      if (this.analyser && this.dataArray) {
-        this.analyser.getByteFrequencyData(this.dataArray);
-        const spec = [];
-        const numBands = 16;
-        const step = Math.floor(this.dataArray.length / numBands) || 1;
-        let hasWebAudioData = false;
-
-        for (let i = 0; i < numBands; i++) {
-          const val = (this.dataArray[i * step] || 0) / 255.0;
-          spec.push(val);
-          if (val > 0.01) hasWebAudioData = true;
+    // Native Android Bridge spectrum
+    if (window.AndroidBridge && window.AndroidBridge.getAudioSpectrum) {
+      try {
+        const jsonStr = window.AndroidBridge.getAudioSpectrum();
+        if (jsonStr) {
+          const parsed = JSON.parse(jsonStr);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
         }
-
-        if (hasWebAudioData) return spec;
-      }
-
-      // Native Android Bridge spectrum
-      if (window.AndroidBridge && window.AndroidBridge.getAudioSpectrum) {
-        try {
-          const jsonStr = window.AndroidBridge.getAudioSpectrum();
-          if (jsonStr) {
-            const parsed = JSON.parse(jsonStr);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-          }
-        } catch (e) {}
-      }
-
-      return window._currentAudioSpectrum || new Array(16).fill(0);
+      } catch (e) {}
     }
-  };
 
-  window.AudioIn = AudioInClass;
+    return window._currentAudioSpectrum || new Array(16).fill(0);
+  }
+}
+
+// Bind AudioIn globally
+window.AudioIn = AudioInClass;
+if (typeof p5 !== 'undefined') {
+  p5.AudioIn = AudioInClass;
+}
+
+// Initialize CodeMirror 6 Editor and Bridge Pipeline
+window.addEventListener('DOMContentLoaded', () => {
   if (typeof p5 !== 'undefined') {
     p5.AudioIn = AudioInClass;
   }
@@ -315,11 +320,9 @@ window.runSketch = function (codeOverride) {
       p.windowWidth = canvasContainer.clientWidth || window.innerWidth;
       p.windowHeight = canvasContainer.clientHeight || window.innerHeight;
 
-      // Attach AudioIn and audio helpers directly to p5 instance
-      const AudioInClass = window.AudioIn || (typeof p5 !== 'undefined' ? p5.AudioIn : null);
-      if (AudioInClass) {
-        p.AudioIn = AudioInClass;
-      }
+      // Attach AudioIn and p5 constructor reference to p5 instance context
+      p.p5 = window.p5;
+      p.AudioIn = window.AudioIn || (typeof p5 !== 'undefined' ? p5.AudioIn : AudioInClass);
       p.getAudioLevel = function () {
         const ai = new (p.AudioIn || window.AudioIn)();
         return ai.getLevel();
@@ -415,19 +418,15 @@ window.setCode = function (newCode) {
 
 window.setCodeFromBase64 = function (base64Str) {
   try {
-    const bytes = atob(base64Str);
-    let codeStr = '';
-    for (let i = 0; i < bytes.length; i++) {
-      codeStr += String.fromCharCode(bytes.charCodeAt(i));
+    const binaryString = atob(base64Str);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
     }
-    const utf8Code = decodeURIComponent(escape(codeStr));
-    window.setCode(utf8Code);
+    const decodedCode = new TextDecoder('utf-8').decode(bytes);
+    window.setCode(decodedCode);
   } catch (e) {
-    try {
-      window.setCode(atob(base64Str));
-    } catch (err) {
-      console.error('Failed to decode Base64 code:', err);
-    }
+    console.error('Failed to decode Base64 code:', e);
   }
 };
 

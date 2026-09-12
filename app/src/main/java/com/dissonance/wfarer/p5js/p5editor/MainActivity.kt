@@ -29,6 +29,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.dissonance.wfarer.p5js.BuildConfig
 import com.dissonance.wfarer.p5js.R
 import com.dissonance.wfarer.p5js.audio.AudioInputManager
 import java.io.OutputStream
@@ -162,6 +163,10 @@ class MainActivity : AppCompatActivity(), AndroidBridge.BridgeListener {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
+        if (BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
+
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
         val settings: WebSettings = webView.settings
@@ -197,14 +202,25 @@ class MainActivity : AppCompatActivity(), AndroidBridge.BridgeListener {
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest?) {
-                if (request != null) {
-                    for (resource in request.resources) {
-                        if (resource == PermissionRequest.RESOURCE_AUDIO_CAPTURE) {
-                            request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
-                            return
-                        }
-                    }
-                    request.grant(request.resources)
+                if (request == null) return
+
+                // Granting WebView capture without the OS-level runtime permission
+                // makes Chromium open the mic unprivileged and fail; only grant
+                // audio capture once the app actually holds RECORD_AUDIO.
+                val micPermissionGranted = ContextCompat.checkSelfPermission(
+                    this@MainActivity,
+                    Manifest.permission.RECORD_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+
+                val resources = request.resources
+                val grantable = resources.all {
+                    it != PermissionRequest.RESOURCE_AUDIO_CAPTURE || micPermissionGranted
+                }
+
+                if (grantable) {
+                    request.grant(resources)
+                } else {
+                    request.deny()
                 }
             }
         }
@@ -250,7 +266,14 @@ class MainActivity : AppCompatActivity(), AndroidBridge.BridgeListener {
                 Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED
         ) {
-            audioInputManager?.startRecording()
+            val started = audioInputManager?.startRecording() ?: false
+            if (!started) {
+                Toast.makeText(
+                    this,
+                    "Mic capture failed to start - another app may be using the microphone",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         } else {
             requestMicPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
@@ -334,8 +357,7 @@ class MainActivity : AppCompatActivity(), AndroidBridge.BridgeListener {
             "2. Cyber Matrix Flow Grid",
             "3. Neon Sine Waves",
             "4. Generative Constellation Field",
-            "5. Live Mic Audio Wave Visualizer",
-            "6. Mic Audio Spectrum Pulsar Grid"
+            "5. Mic Audio Spectrum Pulsar Grid"
         )
 
         AlertDialog.Builder(this)
@@ -346,7 +368,6 @@ class MainActivity : AppCompatActivity(), AndroidBridge.BridgeListener {
                     1 -> PRESET_CYBER_GRID
                     2 -> PRESET_NEON_WAVES
                     3 -> PRESET_CONSTELLATION
-                    4 -> PRESET_AUDIO_SYNTH
                     else -> PRESET_SPECTRUM_GRID
                 }
                 val base64Code = Base64.encodeToString(code.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
@@ -506,52 +527,6 @@ function draw() {
       }
     }
   }
-}"""
-
-        private const val PRESET_AUDIO_SYNTH = """// Live Mic Audio Wave Visualizer
-let mic;
-
-function setup() {
-  createCanvas(windowWidth, windowHeight);
-  colorMode(HSB, 360, 100, 100, 1);
-  mic = new p5.AudioIn();
-  mic.start();
-}
-
-function draw() {
-  background(15, 0.25);
-  translate(width / 2, height / 2);
-
-  let level = mic.getLevel();
-  let spectrum = mic.getSpectrum();
-
-  let numBars = spectrum.length || 16;
-  let baseRadius = 50 + level * 100;
-
-  for (let i = 0; i < numBars; i++) {
-    let angle = map(i, 0, numBars, 0, TWO_PI);
-    let bandValue = spectrum[i] || 0;
-    let len = 20 + bandValue * 220 + level * 80;
-
-    let x1 = cos(angle) * baseRadius;
-    let y1 = sin(angle) * baseRadius;
-    let x2 = cos(angle) * (baseRadius + len);
-    let y2 = sin(angle) * (baseRadius + len);
-
-    let hue = (i * (360 / numBars) + frameCount * 2) % 360;
-    stroke(hue, 85, 100, 0.9);
-    strokeWeight(4 + level * 6);
-    line(x1, y1, x2, y2);
-
-    fill(hue, 80, 100, 0.8);
-    noStroke();
-    circle(x2, y2, 6 + bandValue * 12);
-  }
-
-  noFill();
-  stroke((frameCount * 3) % 360, 80, 100, 0.8);
-  strokeWeight(3);
-  circle(0, 0, baseRadius * 1.6);
 }"""
 
         private const val PRESET_SPECTRUM_GRID = """// Mic Audio Spectrum Pulsar Grid
